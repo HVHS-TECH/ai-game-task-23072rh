@@ -22,6 +22,7 @@
       top: 10px;
       left: 10px;
       font-size: 16px;
+      user-select: none;
     }
     #gameOver {
       position: absolute;
@@ -61,11 +62,23 @@
     const hud = document.getElementById("hud");
     const gameOverDiv = document.getElementById("gameOver");
 
-    let score = 0, lives = 3, wave = 1, gameRunning = true;
-    const bullets = [], enemyBullets = [], powerUps = [], enemies = [], shields = [];
-    const keys = {};
-    let boss = null;
+    // Game state
+    let score = 0;
+    let lives = 3;
+    let wave = 1;
+    let gameRunning = true;
 
+    // Entities
+    const bullets = [];
+    const enemyBullets = [];
+    const powerUps = [];
+    const enemies = [];
+    const shields = [];
+
+    // Input tracking
+    const keys = {};
+
+    // Player object
     const player = {
       x: canvas.width / 2 - 25,
       y: canvas.height - 50,
@@ -75,15 +88,24 @@
       speed: 5,
       shield: false,
       rapidFire: false,
-      doubleShot: false
+      doubleShot: false,
     };
 
+    // Boss object (null if no boss active)
+    let boss = null;
+
+    // Shoot cooldowns
+    let shootCooldown = 0;
+    let enemyShootCooldown = 0;
+
+    // Boss definitions
     const bosses = [
       {
         name: "Sentinel",
         width: 100,
         height: 40,
         color: "purple",
+        maxHealth: 50,
         health: 50,
         shootPattern: "volley"
       },
@@ -92,6 +114,7 @@
         width: 80,
         height: 30,
         color: "cyan",
+        maxHealth: 30,
         health: 30,
         shootPattern: "tracking"
       },
@@ -100,100 +123,232 @@
         width: 120,
         height: 50,
         color: "orange",
+        maxHealth: 40,
         health: 40,
         shootPattern: "burst"
       }
     ];
 
-    document.addEventListener("keydown", e => keys[e.key] = true);
-    document.addEventListener("keyup", e => keys[e.key] = false);
+    // Enemy configuration
+    const enemyRows = 4;
+    const enemyCols = 10;
+    const enemyWidth = 40;
+    const enemyHeight = 20;
+    const enemySpacingX = 10;
+    const enemySpacingY = 20;
+    let enemyDirection = 1;
+    let enemySpeed = 1;
+    let enemyDescend = 10;
+
+    // Power-up types
+    const powerUpTypes = ["shield", "rapidFire", "doubleShot"];
+
+    // Input handling
+    document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+    document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
 
     document.addEventListener("keydown", e => {
       if (e.key === " " && gameRunning && shootCooldown <= 0) {
-        fireBullet();
+        firePlayerBullets();
         shootCooldown = player.rapidFire ? 5 : 15;
       }
     });
 
-    let shootCooldown = 0;
-
-    function fireBullet() {
-      bullets.push({ x: player.x + player.width / 2 - 2, y: player.y, width: 4, height: 10, speed: 8 });
+    // Fire player's bullets (handle double shot)
+    function firePlayerBullets() {
+      bullets.push({ x: player.x + player.width / 2 - 2, y: player.y, width: 4, height: 10, speed: 8, color: "lime" });
       if (player.doubleShot) {
-        bullets.push({ x: player.x + player.width / 2 - 12, y: player.y, width: 4, height: 10, speed: 8 });
-        bullets.push({ x: player.x + player.width / 2 + 8, y: player.y, width: 4, height: 10, speed: 8 });
+        bullets.push({ x: player.x + 10, y: player.y, width: 4, height: 10, speed: 8, color: "lime" });
+        bullets.push({ x: player.x + player.width - 14, y: player.y, width: 4, height: 10, speed: 8, color: "lime" });
       }
     }
 
+    // Utility to draw rectangles
     function drawRect(obj) {
       ctx.fillStyle = obj.color || "white";
       ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
     }
 
-    function drawBossHealth() {
-      if (!boss) return;
-      ctx.fillStyle = "white";
-      ctx.fillText(boss.name + " HP:", 10, 40);
-      ctx.fillStyle = "red";
-      ctx.fillRect(100, 25, boss.health * 5, 10);
+    // Draw text centered
+    function drawText(text, x, y, size = "16px", color = "white") {
+      ctx.fillStyle = color;
+      ctx.font = `${size} monospace`;
+      ctx.fillText(text, x, y);
     }
 
+    // Spawn normal enemies for wave
+    function spawnEnemies() {
+      enemies.length = 0;
+      enemyDirection = 1;
+      enemySpeed = 1 + (wave - 1) * 0.2;
+      for (let row = 0; row < enemyRows; row++) {
+        for (let col = 0; col < enemyCols; col++) {
+          enemies.push({
+            x: 50 + col * (enemyWidth + enemySpacingX),
+            y: 50 + row * (enemyHeight + enemySpacingY),
+            width: enemyWidth,
+            height: enemyHeight,
+            color: "red",
+            alive: true,
+            shootCooldown: 50 + Math.random() * 200 // random shoot timer
+          });
+        }
+      }
+    }
+
+    // Create shields (walls) for player to hide behind
+    function createShields() {
+      shields.length = 0;
+      const shieldWidth = 60;
+      const shieldHeight = 20;
+      const gap = 150;
+      for (let i = 0; i < 4; i++) {
+        shields.push({
+          x: 80 + i * gap,
+          y: canvas.height - 120,
+          width: shieldWidth,
+          height: shieldHeight,
+          health: 10,
+          color: "cyan"
+        });
+      }
+    }
+
+    // Spawn power-ups randomly at top (occasionally dropped by enemies)
+    function spawnPowerUp(x, y) {
+      const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
+      powerUps.push({
+        x, y,
+        width: 20,
+        height: 20,
+        color: type === "shield" ? "cyan" : type === "rapidFire" ? "yellow" : "magenta",
+        type,
+        speed: 2
+      });
+    }
+
+    // Spawn a boss for boss wave
     function spawnBoss() {
-      const type = bosses[Math.floor(Math.random() * bosses.length)];
+      const b = bosses[Math.floor(Math.random() * bosses.length)];
       boss = {
-        ...type,
-        x: canvas.width / 2 - type.width / 2,
+        ...b,
+        x: canvas.width / 2 - b.width / 2,
         y: 60,
         dir: 1,
-        cooldown: 100
+        shootCooldown: 100,
+        health: b.maxHealth
       };
     }
 
+    // Update boss movement and shooting
     function updateBoss() {
       if (!boss) return;
-      boss.x += 2 * boss.dir;
-      if (boss.x <= 0 || boss.x + boss.width >= canvas.width) boss.dir *= -1;
 
-      boss.cooldown--;
-      if (boss.cooldown <= 0) {
+      // Move left-right
+      boss.x += 3 * boss.dir;
+      if (boss.x <= 0) boss.dir = 1;
+      if (boss.x + boss.width >= canvas.width) boss.dir = -1;
+
+      boss.shootCooldown--;
+      if (boss.shootCooldown <= 0) {
+        // Boss attack pattern
         if (boss.shootPattern === "volley") {
+          // Shoot 3 bullets spread
           for (let i = -1; i <= 1; i++) {
-            enemyBullets.push({ x: boss.x + boss.width / 2 + i * 10, y: boss.y + boss.height, width: 4, height: 10, speed: 4, color: "red" });
+            enemyBullets.push({
+              x: boss.x + boss.width / 2 + i * 15,
+              y: boss.y + boss.height,
+              width: 6,
+              height: 12,
+              speed: 5,
+              color: "red",
+              dx: 0,
+              dy: 1
+            });
           }
         } else if (boss.shootPattern === "tracking") {
+          // Shoot a bullet tracking the player
           const dx = player.x + player.width / 2 - (boss.x + boss.width / 2);
           const dy = player.y - boss.y;
           const mag = Math.sqrt(dx * dx + dy * dy);
-          enemyBullets.push({ x: boss.x + boss.width / 2, y: boss.y + boss.height, width: 4, height: 10, dx: dx / mag * 3, dy: dy / mag * 3, tracking: true, color: "magenta" });
+          enemyBullets.push({
+            x: boss.x + boss.width / 2,
+            y: boss.y + boss.height,
+            width: 6,
+            height: 12,
+            speed: 5,
+            color: "magenta",
+            dx: dx / mag * 4,
+            dy: dy / mag * 4,
+            tracking: true
+          });
         } else if (boss.shootPattern === "burst") {
+          // Shoot bullets in all directions (8)
           for (let i = 0; i < 8; i++) {
             const angle = i * Math.PI / 4;
-            enemyBullets.push({ x: boss.x + boss.width / 2, y: boss.y + boss.height, width: 4, height: 4, dx: Math.cos(angle) * 3, dy: Math.sin(angle) * 3, tracking: true, color: "orange" });
+            enemyBullets.push({
+              x: boss.x + boss.width / 2,
+              y: boss.y + boss.height,
+              width: 6,
+              height: 6,
+              speed: 5,
+              color: "orange",
+              dx: Math.cos(angle) * 4,
+              dy: Math.sin(angle) * 4,
+              tracking: false
+            });
           }
         }
-        boss.cooldown = 60;
+        boss.shootCooldown = 90;
       }
 
-      bullets.forEach((b, i) => {
-        if (b.x < boss.x + boss.width && b.x + b.width > boss.x && b.y < boss.y + boss.height && b.y + b.height > boss.y) {
+      // Check collision with player bullets
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        let b = bullets[i];
+        if (rectIntersect(b, boss)) {
           bullets.splice(i, 1);
           boss.health--;
+          score += 5;
           if (boss.health <= 0) {
             boss = null;
             wave++;
             spawnEnemies();
             createShields();
+            break;
           }
         }
-      });
+      }
     }
 
-    function update() {
-      if (!gameRunning) return;
-      if (shootCooldown > 0) shootCooldown--;
-      if (keys["ArrowLeft"] && player.x > 0) player.x -= player.speed;
-      if (keys["ArrowRight"] && player.x + player.width < canvas.width) player.x += player.speed;
-      bullets.forEach((b, i) => (b.y -= b.speed) < 0 && bullets.splice(i, 1));
+    // Rectangular collision detection
+    function rectIntersect(a, b) {
+      return a.x < b.x + b.width &&
+             a.x + a.width > b.x &&
+             a.y < b.y + b.height &&
+             a.y + a.height > b.y;
+    }
+
+    // Update enemies (movement, shooting)
+    function updateEnemies() {
+      if (enemies.length === 0) {
+        wave++;
+        spawnEnemies();
+        createShields();
+        enemySpeed += 0.2; // increase speed each wave
+      }
+
+      // Move enemies sideways and descend on edge
+      let leftMost = Math.min(...enemies.filter(e => e.alive).map(e => e.x));
+      let rightMost = Math.max(...enemies.filter(e => e.alive).map(e => e.x + e.width));
+      if ((enemyDirection === 1 && rightMost + enemySpeed > canvas.width) ||
+          (enemyDirection === -1 && leftMost - enemySpeed < 0)) {
+        enemyDirection *= -1;
+        enemies.forEach(e => e.y += enemyDescend);
+      } else {
+        enemies.forEach(e => { if(e.alive) e.x += enemySpeed * enemyDirection; });
+      }
+
+      // Enemies shoot randomly
       enemyBullets.forEach((b, i) => {
         if (b.tracking) {
           b.x += b.dx;
@@ -201,62 +356,267 @@
         } else {
           b.y += b.speed;
         }
-        if (b.y > canvas.height) enemyBullets.splice(i, 1);
+        // Remove off screen
+        if (b.y > canvas.height || b.x < 0 || b.x > canvas.width) enemyBullets.splice(i, 1);
       });
 
+      enemies.forEach(enemy => {
+        if (!enemy.alive) return;
+        enemy.shootCooldown--;
+        if (enemy.shootCooldown <= 0) {
+          // Shoot bullet downward
+          enemyBullets.push({
+            x: enemy.x + enemy.width / 2 - 3,
+            y: enemy.y + enemy.height,
+            width: 6,
+            height: 12,
+            speed: 4,
+            color: "red",
+            dx: 0,
+            dy: 1,
+          });
+          enemy.shootCooldown = 80 + Math.random() * 120;
+        }
+      });
+    }
+
+    // Update all game state
+    function update() {
+      if (!gameRunning) return;
+
+      // Handle player movement
+      if (keys["arrowleft"] && player.x > 0) player.x -= player.speed;
+      if (keys["arrowright"] && player.x + player.width < canvas.width) player.x += player.speed;
+
+      if (shootCooldown > 0) shootCooldown--;
+
+      // Update bullets
+      bullets.forEach((b, i) => {
+        b.y -= b.speed;
+        if (b.y + b.height < 0) bullets.splice(i, 1);
+      });
+
+      // Update enemy bullets
+      enemyBullets.forEach((b, i) => {
+        if (b.tracking) {
+          b.x += b.dx;
+          b.y += b.dy;
+        } else {
+          b.y += b.speed;
+        }
+        if (b.y > canvas.height || b.x < 0 || b.x > canvas.width) enemyBullets.splice(i, 1);
+      });
+
+      // Update shields (destroy if health 0)
+      for (let i = shields.length -1; i >=0; i--) {
+        if (shields[i].health <= 0) {
+          shields.splice(i, 1);
+        }
+      }
+
+      // Boss fight or normal wave?
       if (wave % 5 === 0 && !boss) {
         spawnBoss();
       }
 
-      updateBoss();
+      if (boss) {
+        updateBoss();
+      } else {
+        updateEnemies();
+      }
 
+      // Bullet collisions
+      checkCollisions();
+
+      // Update power-ups falling
+      for (let i = powerUps.length - 1; i >= 0; i--) {
+        const p = powerUps[i];
+        p.y += p.speed;
+        if (p.y > canvas.height) {
+          powerUps.splice(i, 1);
+          continue;
+        }
+        // Player collects power-up
+        if (rectIntersect(p, player)) {
+          powerUps.splice(i, 1);
+          activatePowerUp(p.type);
+        }
+      }
+
+      // HUD update
       hud.innerText = `Score: ${score} | Lives: ${lives} | Wave: ${wave}`;
+
+      if (lives <= 0) {
+        gameOver();
+      }
     }
 
+    // Activate power-up effects
+    function activatePowerUp(type) {
+      if (type === "shield") {
+        player.shield = true;
+        setTimeout(() => player.shield = false, 15000);
+      } else if (type === "rapidFire") {
+        player.rapidFire = true;
+        setTimeout(() => player.rapidFire = false, 15000);
+      } else if (type === "doubleShot") {
+        player.doubleShot = true;
+        setTimeout(() => player.doubleShot = false, 15000);
+      }
+    }
+
+    // Check all collisions: bullets with enemies, player with bullets, bullets with shields etc.
+    function checkCollisions() {
+      // Player bullets vs enemies
+      if (!boss) {
+        for (let i = enemies.length - 1; i >= 0; i--) {
+          const enemy = enemies[i];
+          if (!enemy.alive) continue;
+          for (let j = bullets.length - 1; j >= 0; j--) {
+            if (rectIntersect(bullets[j], enemy)) {
+              bullets.splice(j, 1);
+              enemy.alive = false;
+              score += 10;
+
+              // Chance to drop power-up
+              if (Math.random() < 0.1) {
+                spawnPowerUp(enemy.x + enemy.width / 2, enemy.y + enemy.height);
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      // Enemy bullets vs player
+      for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        if (rectIntersect(enemyBullets[i], player)) {
+          if (player.shield) {
+            // Shield absorbs bullet
+            enemyBullets.splice(i, 1);
+          } else {
+            enemyBullets.splice(i, 1);
+            lives--;
+            if (lives <= 0) {
+              gameOver();
+            }
+          }
+        }
+      }
+
+      // Bullets (player & enemy) vs shields
+      [...bullets, ...enemyBullets].forEach((bullet) => {
+        for (let shield of shields) {
+          if (rectIntersect(bullet, shield)) {
+            bullet.toRemove = true;
+            shield.health--;
+          }
+        }
+      });
+      // Remove bullets marked for removal
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        if (bullets[i].toRemove) bullets.splice(i, 1);
+      }
+      for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        if (enemyBullets[i].toRemove) enemyBullets.splice(i, 1);
+      }
+    }
+
+    // Draw everything
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!gameRunning) return;
-      drawRect(player);
-      bullets.forEach(drawRect);
-      enemyBullets.forEach(drawRect);
-      if (boss) drawRect(boss);
-      drawBossHealth();
+
+      // Player
+      ctx.fillStyle = player.color;
+      ctx.fillRect(player.x, player.y, player.width, player.height);
+
+      // Draw player shield if active
+      if (player.shield) {
+        ctx.strokeStyle = "cyan";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(player.x + player.width / 2, player.y + player.height / 2, 35, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Bullets
+      bullets.forEach(b => drawRect(b));
+      enemyBullets.forEach(b => drawRect(b));
+
+      // Enemies
+      enemies.forEach(e => {
+        if (e.alive) drawRect(e);
+      });
+
+      // Shields
+      shields.forEach(s => {
+        ctx.fillStyle = s.color;
+        ctx.fillRect(s.x, s.y, s.width, s.height);
+        ctx.strokeStyle = "white";
+        ctx.strokeRect(s.x, s.y, s.width, s.height);
+        // Draw health bar on shields
+        ctx.fillStyle = "lime";
+        ctx.fillRect(s.x, s.y + s.height + 2, s.width * (s.health / 10), 4);
+      });
+
+      // Power-ups
+      powerUps.forEach(p => drawRect(p));
+
+      // Draw boss
+      if (boss) {
+        ctx.fillStyle = boss.color;
+        ctx.fillRect(boss.x, boss.y, boss.width, boss.height);
+        // Boss health bar
+        ctx.fillStyle = "red";
+        ctx.fillRect(boss.x, boss.y - 10, boss.width, 6);
+        ctx.fillStyle = "lime";
+        ctx.fillRect(boss.x, boss.y - 10, boss.width * (boss.health / boss.maxHealth), 6);
+
+        // Boss name
+        ctx.fillStyle = "white";
+        ctx.font = "20px monospace";
+        ctx.fillText(boss.name, boss.x, boss.y - 15);
+      }
     }
 
-    function gameLoop() {
+    // Game loop
+    function loop() {
       update();
       draw();
-      requestAnimationFrame(gameLoop);
+      if (gameRunning) requestAnimationFrame(loop);
     }
 
-    function spawnEnemies() {
-      // Already included in previous code; reuse as needed.
-    }
-
-    function createShields() {
-      // Already included in previous code; reuse as needed.
+    // Game over handler
+    function gameOver() {
+      gameRunning = false;
+      gameOverDiv.style.display = "block";
     }
 
     function restartGame() {
       score = 0;
       lives = 3;
       wave = 1;
+      boss = null;
       bullets.length = 0;
       enemyBullets.length = 0;
+      enemies.length = 0;
       powerUps.length = 0;
+      shields.length = 0;
+      player.x = canvas.width / 2 - player.width / 2;
       player.shield = false;
       player.rapidFire = false;
       player.doubleShot = false;
-      boss = null;
-      spawnEnemies();
-      createShields();
       gameRunning = true;
       gameOverDiv.style.display = "none";
+      spawnEnemies();
+      createShields();
+      loop();
     }
 
+    // Start game initially
     spawnEnemies();
     createShields();
-    gameLoop();
+    loop();
   </script>
 </body>
 </html>
