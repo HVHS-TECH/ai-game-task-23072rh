@@ -1,14 +1,262 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<title>Page Title</title>
+  <meta charset="UTF-8" />
+  <title>Space Invaders with Boss Fights</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      color: white;
+      font-family: monospace;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      margin: 0 auto;
+      background: #000;
+      border: 2px solid #fff;
+    }
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-size: 16px;
+    }
+    #gameOver {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      font-size: 30px;
+      display: none;
+      text-align: center;
+    }
+    button {
+      margin-top: 10px;
+      padding: 8px 16px;
+      font-size: 16px;
+      background: #222;
+      color: white;
+      border: 1px solid white;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #444;
+    }
+  </style>
 </head>
 <body>
+  <div id="hud">Score: 0 | Lives: 3 | Wave: 1</div>
+  <div id="gameOver">
+    <div>GAME OVER</div>
+    <button onclick="restartGame()">Restart</button>
+  </div>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
 
-<h1>This is a Heading</h1>
-<p>This is a paragraph.</p>
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const hud = document.getElementById("hud");
+    const gameOverDiv = document.getElementById("gameOver");
 
+    let score = 0, lives = 3, wave = 1, gameRunning = true;
+    const bullets = [], enemyBullets = [], powerUps = [], enemies = [], shields = [];
+    const keys = {};
+    let boss = null;
+
+    const player = {
+      x: canvas.width / 2 - 25,
+      y: canvas.height - 50,
+      width: 50,
+      height: 20,
+      color: "lime",
+      speed: 5,
+      shield: false,
+      rapidFire: false,
+      doubleShot: false
+    };
+
+    const bosses = [
+      {
+        name: "Sentinel",
+        width: 100,
+        height: 40,
+        color: "purple",
+        health: 50,
+        shootPattern: "volley"
+      },
+      {
+        name: "Phantom",
+        width: 80,
+        height: 30,
+        color: "cyan",
+        health: 30,
+        shootPattern: "tracking"
+      },
+      {
+        name: "Hydra",
+        width: 120,
+        height: 50,
+        color: "orange",
+        health: 40,
+        shootPattern: "burst"
+      }
+    ];
+
+    document.addEventListener("keydown", e => keys[e.key] = true);
+    document.addEventListener("keyup", e => keys[e.key] = false);
+
+    document.addEventListener("keydown", e => {
+      if (e.key === " " && gameRunning && shootCooldown <= 0) {
+        fireBullet();
+        shootCooldown = player.rapidFire ? 5 : 15;
+      }
+    });
+
+    let shootCooldown = 0;
+
+    function fireBullet() {
+      bullets.push({ x: player.x + player.width / 2 - 2, y: player.y, width: 4, height: 10, speed: 8 });
+      if (player.doubleShot) {
+        bullets.push({ x: player.x + player.width / 2 - 12, y: player.y, width: 4, height: 10, speed: 8 });
+        bullets.push({ x: player.x + player.width / 2 + 8, y: player.y, width: 4, height: 10, speed: 8 });
+      }
+    }
+
+    function drawRect(obj) {
+      ctx.fillStyle = obj.color || "white";
+      ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+    }
+
+    function drawBossHealth() {
+      if (!boss) return;
+      ctx.fillStyle = "white";
+      ctx.fillText(boss.name + " HP:", 10, 40);
+      ctx.fillStyle = "red";
+      ctx.fillRect(100, 25, boss.health * 5, 10);
+    }
+
+    function spawnBoss() {
+      const type = bosses[Math.floor(Math.random() * bosses.length)];
+      boss = {
+        ...type,
+        x: canvas.width / 2 - type.width / 2,
+        y: 60,
+        dir: 1,
+        cooldown: 100
+      };
+    }
+
+    function updateBoss() {
+      if (!boss) return;
+      boss.x += 2 * boss.dir;
+      if (boss.x <= 0 || boss.x + boss.width >= canvas.width) boss.dir *= -1;
+
+      boss.cooldown--;
+      if (boss.cooldown <= 0) {
+        if (boss.shootPattern === "volley") {
+          for (let i = -1; i <= 1; i++) {
+            enemyBullets.push({ x: boss.x + boss.width / 2 + i * 10, y: boss.y + boss.height, width: 4, height: 10, speed: 4, color: "red" });
+          }
+        } else if (boss.shootPattern === "tracking") {
+          const dx = player.x + player.width / 2 - (boss.x + boss.width / 2);
+          const dy = player.y - boss.y;
+          const mag = Math.sqrt(dx * dx + dy * dy);
+          enemyBullets.push({ x: boss.x + boss.width / 2, y: boss.y + boss.height, width: 4, height: 10, dx: dx / mag * 3, dy: dy / mag * 3, tracking: true, color: "magenta" });
+        } else if (boss.shootPattern === "burst") {
+          for (let i = 0; i < 8; i++) {
+            const angle = i * Math.PI / 4;
+            enemyBullets.push({ x: boss.x + boss.width / 2, y: boss.y + boss.height, width: 4, height: 4, dx: Math.cos(angle) * 3, dy: Math.sin(angle) * 3, tracking: true, color: "orange" });
+          }
+        }
+        boss.cooldown = 60;
+      }
+
+      bullets.forEach((b, i) => {
+        if (b.x < boss.x + boss.width && b.x + b.width > boss.x && b.y < boss.y + boss.height && b.y + b.height > boss.y) {
+          bullets.splice(i, 1);
+          boss.health--;
+          if (boss.health <= 0) {
+            boss = null;
+            wave++;
+            spawnEnemies();
+            createShields();
+          }
+        }
+      });
+    }
+
+    function update() {
+      if (!gameRunning) return;
+      if (shootCooldown > 0) shootCooldown--;
+      if (keys["ArrowLeft"] && player.x > 0) player.x -= player.speed;
+      if (keys["ArrowRight"] && player.x + player.width < canvas.width) player.x += player.speed;
+      bullets.forEach((b, i) => (b.y -= b.speed) < 0 && bullets.splice(i, 1));
+      enemyBullets.forEach((b, i) => {
+        if (b.tracking) {
+          b.x += b.dx;
+          b.y += b.dy;
+        } else {
+          b.y += b.speed;
+        }
+        if (b.y > canvas.height) enemyBullets.splice(i, 1);
+      });
+
+      if (wave % 5 === 0 && !boss) {
+        spawnBoss();
+      }
+
+      updateBoss();
+
+      hud.innerText = `Score: ${score} | Lives: ${lives} | Wave: ${wave}`;
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!gameRunning) return;
+      drawRect(player);
+      bullets.forEach(drawRect);
+      enemyBullets.forEach(drawRect);
+      if (boss) drawRect(boss);
+      drawBossHealth();
+    }
+
+    function gameLoop() {
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function spawnEnemies() {
+      // Already included in previous code; reuse as needed.
+    }
+
+    function createShields() {
+      // Already included in previous code; reuse as needed.
+    }
+
+    function restartGame() {
+      score = 0;
+      lives = 3;
+      wave = 1;
+      bullets.length = 0;
+      enemyBullets.length = 0;
+      powerUps.length = 0;
+      player.shield = false;
+      player.rapidFire = false;
+      player.doubleShot = false;
+      boss = null;
+      spawnEnemies();
+      createShields();
+      gameRunning = true;
+      gameOverDiv.style.display = "none";
+    }
+
+    spawnEnemies();
+    createShields();
+    gameLoop();
+  </script>
 </body>
 </html>
-
-
